@@ -234,7 +234,7 @@ def chunk_arg(value):
 
 def format_summary(report):
     """One row per order, all savings relative to unencoded raster."""
-    lines = ["macroblock chunk   lag order      bits     transitions    vs raster      fold only   fold UV only"]
+    lines = ["macroblock chunk   lag order      bits     transitions    vs raster     fold bit 8  fold UV bit 8"]
     baseline = None
     for raw in report["results"]:
         if raw["order"] == "raster":

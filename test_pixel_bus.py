@@ -98,7 +98,7 @@ class MeasurementTests(unittest.TestCase):
         self.assertNotIn('encoding', summary)
         self.assertIn('transitions', summary.splitlines()[0])
         self.assertIn('vs raster', summary.splitlines()[0])
-        self.assertIn('fold only', summary.splitlines()[0])
+        self.assertIn('fold bit 8', summary.splitlines()[0])
         self.assertIn('30.00%', summary.splitlines()[2])
         self.assertEqual(summary.splitlines()[2].split()[5], '90')
         self.assertIn('10.00%', summary.splitlines()[2])

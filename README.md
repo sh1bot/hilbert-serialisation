@@ -127,13 +127,14 @@ hierarchical curve and a full-resolution curve.
 ## Folding comparisons
 
 The console shows raw `transitions` and three savings columns: `vs raster`,
-`fold only` (all channels), and `fold UV only` (Y unchanged). All use unencoded
+`fold bit 8` (all channels), and `fold UV bit 8` (Y unchanged). All use unencoded
 raster for the same chunk, macroblock, packing and lag as their baseline.
 Positive means fewer transitions; negative means more. Zero baselines give n/a.
 UV-only folding is n/a for RGB and grayscale inputs.
 
 `fold_signed_bytes(values)` applies `v XOR (0x7f if v & 0x80 else 0)` to each
-byte independently. This stateless mapping is its own inverse. Both folding
+byte independently. Bit 8 (the MSB, numbered from 1) controls complementing
+the lower seven bits; the MSB itself is retained. This stateless mapping is its own inverse. Both folding
 columns use it directly, without centering chroma. The separate reusable
 `fold_biased_chroma` helper centers around 128 before folding, but is not applied
 automatically by the comparisons.
@@ -147,3 +148,12 @@ reductions use that channel's raw raster count. Undefined ratios are null.
 ```sh
 python pixel_bus.py photo.jpg --macroblock 32x32 --macroblock 64x64 --chunk 4x4 --lag 1 --lag 4
 ```
+
+For example, a 64x64 macroblock divided into 8x4 chunks has an 8x16 chunk
+grid. Hilbert ordering embeds that grid in a 16x16 square, traverses the square
+with the standard discrete Hilbert curve, and skips coordinates with x >= 8.
+A grid coordinate (x,y) addresses a chunk at pixel origin (8x,4y). This is
+Hilbert ordering of chunk addresses, not a Hilbert curve through individual
+pixels; unequal chunk dimensions also make horizontal and vertical steps
+different distances in pixel space. The default keeps raster lanes inside
+every chunk. Extended packing rejects this rectangular chunk geometry.
