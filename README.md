@@ -123,11 +123,16 @@ hierarchical curve and a full-resolution curve.
 
 ## Delta encoding at the FIFO input
 
-Every configuration now produces paired `raw` and `delta-sm` rows automatically.
-`vs raw` gives the percentage toggle reduction from enabling the encoder for
-that exact traversal, chunk packing and lag. Negative values mean an increase.
-`vs raster` compares against raster with the **same encoding**. JSON also gives
-per-channel `reduction_vs_raw_percent`; zero denominators produce null.
+The console shows one row per order with two percentage savings columns:
+`order-versus-raw` compares that order's unencoded data against unencoded raster;
+`order+delta-versus-raw` compares that order's encoded data against the same
+unencoded raster baseline. Chunk size, packing, macroblock and lag are held
+fixed. Negative values mean increased switching; a zero baseline gives `n/a`.
+
+JSON retains paired `raw` and `delta-sm` records and full per-channel/per-bit
+counts. Its `reduction_vs_raw_percent` compares encoded data with the same
+order's unencoded data; `reduction_vs_raster_percent` compares orders with the
+same encoding. Zero denominators produce null.
 
 The predictor stores the previous complete transfer, independently for each
 8-bit sample lane, after any within-chunk permutation. It resets every lane to

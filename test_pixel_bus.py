@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, sign_magnitude_delta, decode_sign_magnitude
+from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, sign_magnitude_delta, decode_sign_magnitude, format_summary
 
 
 class MeasurementTests(unittest.TestCase):
@@ -96,6 +96,24 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(delta['comparisons'], 4-lag)
             self.assertEqual(delta['encoding'], 'delta-sm')
             self.assertEqual(raw['encoding'], 'raw')
+
+    def test_summary_uses_raw_raster_baseline(self):
+        report = {"results": [dict(order=order, encoding=encoding, total=total,
+                  chunk=[2,2], lag=1, bus_bits=96)
+                  for order, encoding, total in [
+                      ('raster','raw',100), ('raster','delta-sm',80),
+                      ('z','raw',90), ('z','delta-sm',60),
+                      ('hilbert','raw',110), ('hilbert','delta-sm',50)]]}
+        summary = format_summary(report)
+        self.assertEqual(len(summary.splitlines()), 4)
+        self.assertNotIn('delta-sm', summary)
+        self.assertNotIn('encoding', summary)
+        self.assertIn('10.00%', summary.splitlines()[2])
+        self.assertIn('40.00%', summary.splitlines()[2])
+        self.assertIn('-10.00%', summary.splitlines()[3])
+        self.assertIn('50.00%', summary.splitlines()[3])
+        report['results'][0]['total'] = 0
+        self.assertIn('n/a', format_summary(report))
 
     def test_native_jpeg_sampling(self):
         library = os.environ.get('TEST_TURBOJPEG_LIBRARY')

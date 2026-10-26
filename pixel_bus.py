@@ -229,6 +229,21 @@ def chunk_arg(value):
     raise argparse.ArgumentTypeError("expected positive WIDTHxHEIGHT")
 
 
+def format_summary(report):
+    """One row per order, both savings relative to unencoded raster."""
+    lines = ["chunk   lag order      bits  order-versus-raw  order+delta-versus-raw"]
+    baseline = None
+    for raw, encoded in zip(report["results"][::2], report["results"][1::2]):
+        if raw["order"] == "raster":
+            baseline = raw["total"]
+        def reduction(total):
+            return f"{100*(baseline-total)/baseline:.2f}%" if baseline else "n/a"
+        lines.append(f"{raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
+                     f"{raw['order']:<8} {raw['bus_bits']:>6} "
+                     f"{reduction(raw['total']):>17} {reduction(encoded['total']):>22}")
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path)
@@ -251,14 +266,7 @@ def main():
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         parser.exit(2, f"error: {exc}\n")
     print(meta["decode"])
-    print("chunk   lag order    encoding   bits     transitions   vs raster      vs raw   channel totals")
-    for r in report["results"]:
-        reduction = r["reduction_vs_raster_percent"]
-        delta = "n/a" if reduction is None else f"{reduction:.2f}%"
-        raw_reduction = r["reduction_vs_raw_percent"]
-        raw_delta = "n/a" if raw_reduction is None else f"{raw_reduction:.2f}%"
-        channels = " ".join(f"{k}={v['total']}" for k, v in r["channels"].items())
-        print(f"{r['chunk'][0]}x{r['chunk'][1]:<4} {r['lag']:>3} {r['order']:<8} {r['encoding']:<8} {r['bus_bits']:>6} {r['total']:>15} {delta:>11} {raw_delta:>11}   {channels}")
+    print(format_summary(report))
     if args.json:
         args.json.write_text(json.dumps(report, indent=2) + "\n")
 
