@@ -205,6 +205,9 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                     streams[name] = words[indices]
                 sequential = np.arange(len(indices))
                 reset_interval = local_grid[0]*local_grid[1]
+                folded_channels = {name: count_transitions(fold_signed_bytes(stream), sequential, lag)
+                                   for name, stream in streams.items()}
+                folded_total = sum(c["total"] for c in folded_channels.values())
                 for encoding in ("raw", "delta-sm"):
                     channels = {}
                     for name, stream in streams.items():
@@ -219,8 +222,13 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                         raw = baseline_channels[name]
                         channel["baseline_raw_raster_total"] = raw
                         channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
+                    for name, channel in folded_channels.items():
+                        raw = baseline_channels[name]
+                        channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
                     report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
                         "encoding": encoding, "predictor_reset_cycles": reset_interval,
+                        "fold_only": {"total": folded_total, "channels": folded_channels,
+                                      "reduction_vs_raw_percent": 100*(baseline-folded_total)/baseline if baseline else None},
                         "within_chunk": within_chunk, "macroblock": macroblock,
                         "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
                         "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
@@ -242,8 +250,8 @@ def chunk_arg(value):
 
 
 def format_summary(report):
-    """One row per order, both savings relative to unencoded raster."""
-    lines = ["macroblock chunk   lag order      bits     transitions    vs raster  with sm-delta"]
+    """One row per order, all savings relative to unencoded raster."""
+    lines = ["macroblock chunk   lag order      bits     transitions    vs raster      fold only  with sm-delta"]
     baseline = None
     for raw, encoded in zip(report["results"][::2], report["results"][1::2]):
         if raw["order"] == "raster":
@@ -254,7 +262,7 @@ def format_summary(report):
         macro_label = f"{macroblock[0]}x{macroblock[1]}" if macroblock else "image"
         lines.append(f"{macro_label:<10} {raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
                      f"{raw['order']:<8} {raw['bus_bits']:>6} "
-                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(encoded['total']):>14}")
+                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(raw['fold_only']['total']):>14} {reduction(encoded['total']):>14}")
     return "\n".join(lines)
 
 

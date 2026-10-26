@@ -111,7 +111,7 @@ class MeasurementTests(unittest.TestCase):
 
     def test_summary_uses_raw_raster_baseline(self):
         report = {"results": [dict(order=order, encoding=encoding, total=total,
-                  chunk=[2,2], lag=1, bus_bits=96)
+                  chunk=[2,2], lag=1, bus_bits=96, fold_only={"total":70})
                   for order, encoding, total in [
                       ('raster','raw',100), ('raster','delta-sm',80),
                       ('z','raw',90), ('z','delta-sm',60),
@@ -123,6 +123,8 @@ class MeasurementTests(unittest.TestCase):
         self.assertIn('transitions', summary.splitlines()[0])
         self.assertIn('vs raster', summary.splitlines()[0])
         self.assertIn('with sm-delta', summary.splitlines()[0])
+        self.assertIn('fold only', summary.splitlines()[0])
+        self.assertIn('30.00%', summary.splitlines()[2])
         self.assertEqual(summary.splitlines()[2].split()[5], '90')
         self.assertIn('10.00%', summary.splitlines()[2])
         self.assertIn('40.00%', summary.splitlines()[2])
@@ -160,6 +162,15 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(len(run.stdout.splitlines()),14)
             self.assertIn('4x4', run.stdout)
             self.assertIn('8x8', run.stdout)
+
+    def test_fold_only_matches_delta_when_predictor_always_resets(self):
+        plane = np.random.default_rng(4).integers(0,256,(8,8),dtype=np.uint8)
+        report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':8,'height':8},
+                         [(2,2)], [1,3], (2,2))
+        for raw, delta in zip(report['results'][::2],report['results'][1::2]):
+            self.assertEqual(raw['fold_only']['total'], delta['total'])
+            self.assertEqual(raw['fold_only']['channels']['Y']['by_lane_lsb_first'],
+                             delta['channels']['Y']['by_lane_lsb_first'])
 
     def test_native_jpeg_sampling(self):
         library = os.environ.get('TEST_TURBOJPEG_LIBRARY')

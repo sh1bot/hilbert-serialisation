@@ -174,3 +174,17 @@ excluded. A reference decoder is included and tested exhaustively over all
 ```sh
 python pixel_bus.py photo.jpg --macroblock 32x32 --macroblock 64x64 --chunk 4x4 --lag 1 --lag 4
 ```
+
+## Folding without prediction
+
+The `fold only` console column applies `fold_signed_bytes` directly to each
+sample in the row's traversal, with no subtraction or predictor state. Like
+`vs raster` and `with sm-delta`, it reports savings against unencoded raster
+for the same geometry and lag. Raw transition counts remain in `transitions`.
+When macroblock and chunk sizes match, `fold only` and `with sm-delta` must
+match because every predictor resets before every transfer. This direct fold
+does not center biased chroma first; it isolates the exact fold applied by the
+delta encoder when its predictor is zero.
+
+JSON records include a `fold_only` object with total, per-channel, per-lane and
+per-bit measurements and percentage savings versus raw raster.
