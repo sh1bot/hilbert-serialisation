@@ -9,6 +9,8 @@ class IndependentAuditTests(unittest.TestCase):
         # packing, folding, traversal, or transition helpers are used.
         local_orders={'raster':[(0,0),(1,0),(0,1),(1,1)],
                       'z':[(0,0),(1,0),(0,1),(1,1)],
+                      'boustro':[(0,0),(1,0),(1,1),(0,1)],
+                      'boustro-v':[(0,0),(0,1),(1,1),(1,0)],
                       'hilbert':[(0,0),(0,1),(1,1),(1,0)]}
         checks=0
         for seed in range(8):
@@ -35,4 +37,4 @@ class IndependentAuditTests(unittest.TestCase):
                                 result = result['fold_only']
                             self.assertEqual(counts, result['channels']['Y']['by_lane_lsb_first'], (seed,cw,ch,lag,order,kind))
                             checks+=1
-        self.assertEqual(checks, 576)
+        self.assertEqual(checks, 960)

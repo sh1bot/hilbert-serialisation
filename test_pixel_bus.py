@@ -7,21 +7,39 @@ import unittest
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, format_summary, fold_signed_bytes, fold_biased_chroma
+from pixel_bus import ORDERS, coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, format_summary, fold_signed_bytes, fold_biased_chroma
 
 
 class MeasurementTests(unittest.TestCase):
     def test_orders(self):
         for side in (1, 2, 4, 8, 16):
-            for order in ('raster', 'z', 'hilbert'):
+            for order in ORDERS:
                 c = coordinates(side, side, order)
                 self.assertEqual(len(set(map(tuple, c))), side*side)
                 if order == 'hilbert':
                     self.assertTrue(np.all(np.abs(np.diff(c, axis=0)).sum(axis=1) == 1))
         self.assertEqual(coordinates(2, 2, 'hilbert').tolist(), [[0,0],[0,1],[1,1],[1,0]])
         self.assertEqual(coordinates(2, 2, 'z').tolist(), [[0,0],[1,0],[0,1],[1,1]])
-        for order in ('raster', 'z', 'hilbert'):
+        for order in ORDERS:
             self.assertEqual(set(map(tuple, coordinates(3, 7, order))), {(x,y) for x in range(3) for y in range(7)})
+
+    def test_boustrophedon_paths(self):
+        self.assertEqual(coordinates(3,2,'boustro').tolist(),
+                         [[0,0],[1,0],[2,0],[2,1],[1,1],[0,1]])
+        self.assertEqual(coordinates(2,3,'boustro-v').tolist(),
+                         [[0,0],[0,1],[0,2],[1,2],[1,1],[1,0]])
+        for order in ('boustro','boustro-v'):
+            path = coordinates(3,7,order)
+            self.assertTrue(np.all(np.abs(np.diff(path,axis=0)).sum(axis=1)==1))
+            coords,_ = transfer_layout(6,4,order,(1,1),(3,2))
+            np.testing.assert_array_equal(coords[:6],coordinates(3,2,order))
+            np.testing.assert_array_equal(coords[6:12],coordinates(3,2,order)+[3,0])
+            words,shapes,gx,gy=pack_chunks({'Y':np.arange(32,dtype=np.uint8).reshape(4,8)},
+                                         {'Y':(1,1)},8,4,(4,2))
+            coords,local=transfer_layout(gx,gy,order,(4,2),(8,4))
+            ext=extend_lanes(words['Y'],shapes['Y'],coords,gx,local,(4,2),(1,1),order)
+            for original,permuted in zip(words['Y'],ext):
+                np.testing.assert_array_equal(np.sort(original),np.sort(permuted))
 
     def test_count_against_scalar_reference(self):
         rng = np.random.default_rng(7)
@@ -48,7 +66,7 @@ class MeasurementTests(unittest.TestCase):
                          [(1,1)], [1,3], (2,2))
         self.assertEqual(report['results'][0]['cycles'], 24)
         self.assertEqual(report['results'][0]['comparisons'], 23)
-        self.assertEqual(report['results'][3]['comparisons'], 21)
+        self.assertEqual(report['results'][5]['comparisons'], 21)
         with self.assertRaises(ValueError):
             analyze({'Y': plane}, {'Y': (1,1)}, {'width':5,'height':3}, [(2,2)], [1], (3,4))
 
@@ -110,8 +128,8 @@ class MeasurementTests(unittest.TestCase):
         plane = np.random.default_rng(17).integers(0,256,(8,8),dtype=np.uint8)
         report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':8,'height':8},
                          [(1,1),(2,2)], [1,3], (4,4))
-        for start in range(0,len(report['results']),3):
-            rows = report['results'][start:start+3]
+        for start in range(0,len(report['results']),5):
+            rows = report['results'][start:start+5]
             baseline = rows[0]['total']
             for row in rows:
                 expected = 100*(baseline-row['total'])/baseline
@@ -129,10 +147,10 @@ class MeasurementTests(unittest.TestCase):
                 '--lag','1','--lag','3','--json',str(output)], check=True, capture_output=True, text=True)
             report = json.loads(output.read_text())
             self.assertEqual(report['macroblocks'], [[4,4],[8,8]])
-            self.assertEqual(len(report['results']), 12)
+            self.assertEqual(len(report['results']), 20)
             self.assertEqual({(tuple(r['macroblock']),r['lag']) for r in report['results']},
                              {((4,4),1),((4,4),3),((8,8),1),((8,8),3)})
-            self.assertEqual(len(run.stdout.splitlines()),14)
+            self.assertEqual(len(run.stdout.splitlines()),22)
             self.assertIn('4x4', run.stdout)
             self.assertIn('8x8', run.stdout)
 
@@ -170,7 +188,7 @@ class MeasurementTests(unittest.TestCase):
                 self.assertEqual(planes['Y'].shape, (9,13))
                 self.assertEqual(planes['U'].shape, ((9+scale[1]-1)//scale[1], (13+scale[0]-1)//scale[0]))
                 result = analyze(planes, scales, meta, [scale], [1,2])
-                self.assertEqual(len(result['results']), 6)
+                self.assertEqual(len(result['results']), 10)
                 if sampling == 2:
                     self.assertEqual(result['results'][0]['bus_bits'], 48)
                     with self.assertRaises(ValueError):

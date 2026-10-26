@@ -157,3 +157,21 @@ Hilbert ordering of chunk addresses, not a Hilbert curve through individual
 pixels; unequal chunk dimensions also make horizontal and vertical steps
 different distances in pixel space. The default keeps raster lanes inside
 every chunk. Extended packing rejects this rectangular chunk geometry.
+
+## Boustrophedon scans
+
+Every sweep also includes `boustro` (horizontal) and `boustro-v` (vertical).
+Horizontal visits the top chunk row left-to-right, the next right-to-left,
+and alternates thereafter. Vertical visits the left chunk column top-to-bottom,
+the next bottom-to-top, and alternates thereafter. Each macroblock starts the
+same pattern; macroblocks themselves remain in raster order. Both scans support
+rectangular chunk grids without virtual padding of traversal coordinates.
+All percentages continue to use raw raster as their baseline.
+
+With default within-chunk raster packing, lane positions stay fixed. With
+`--within-chunk extend`, samples follow the corresponding local serpentine
+scan, mirrored horizontally on reverse horizontal chunk rows, or vertically
+on reverse vertical chunk columns. This defines a hierarchical scan, rather
+than a single global pixel serpentine scan, and supports rectangular chunks.
+The square power-of-two restriction for extended Hilbert/Z remains; because
+the CLI runs all orders, rectangular extended sweeps still fail that validation.

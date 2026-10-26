@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+ORDERS = ("raster", "boustro", "boustro-v", "z", "hilbert")
+
 
 def load_image(path, mode="auto", turbojpeg_library=None):
     """Return planes, subsampling factors, and explicit decoding metadata."""
@@ -58,7 +60,13 @@ def coordinates(width, height, order):
     """Sort only real coordinates: equivalent to skipping virtual square cells."""
     coords = [(x, y) for y in range(height) for x in range(width)]
     side = 1 << (max(width, height) - 1).bit_length()
-    if order == "hilbert":
+    if order == "boustro":
+        coords = [(x, y) for y in range(height)
+                  for x in (range(width) if y % 2 == 0 else range(width-1, -1, -1))]
+    elif order == "boustro-v":
+        coords = [(x, y) for x in range(width)
+                  for y in (range(height) if x % 2 == 0 else range(height-1, -1, -1))]
+    elif order == "hilbert":
         coords.sort(key=lambda p: hilbert_index(*p, side))
     elif order == "z":
         def morton(p):
@@ -123,7 +131,7 @@ def extend_lanes(words, shape, coords, grid_width, local_grid, chunk, scale, ord
     sx, sy = scale
     mx, my = local_grid
     side = mx*cw
-    if cw != ch or side != my*ch or side & (side-1) or cw & (cw-1):
+    if order not in ("boustro", "boustro-v") and (cw != ch or side != my*ch or side & (side-1) or cw & (cw-1)):
         raise ValueError("Extended packing requires square power-of-two chunks and macroblocks "
                          "(or a square power-of-two padded image when no macroblock is given)")
     result = np.empty_like(words)
@@ -138,6 +146,12 @@ def extend_lanes(words, shape, coords, grid_width, local_grid, chunk, scale, ord
             elif order == "z":
                 # Morton ordering has the same orientation in every child.
                 samples = list(map(tuple, coordinates(pw, ph, "z")))
+            elif order == "boustro":
+                samples = [(pw-1-u if ly % 2 else u, v)
+                           for u, v in coordinates(pw, ph, order)]
+            elif order == "boustro-v":
+                samples = [(u, ph-1-v if lx % 2 else v)
+                           for u, v in coordinates(pw, ph, order)]
             permutations[key] = [v*pw+u for u, v in samples]
         index = y*grid_width+x
         result[index] = words[index, permutations[key]]
@@ -170,7 +184,7 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
         for lag in lags:
             baseline = None
             baseline_channels = None
-            for order in ("raster", "z", "hilbert"):
+            for order in ORDERS:
                 coords, local_grid = transfer_layout(gx, gy, order, chunk, macroblock)
                 indices = coords[:, 1]*gx + coords[:, 0]
                 streams = {}
@@ -234,7 +248,7 @@ def chunk_arg(value):
 
 def format_summary(report):
     """One row per order, all savings relative to unencoded raster."""
-    lines = ["macroblock chunk   lag order      bits     transitions    vs raster     fold bit 8  fold UV bit 8"]
+    lines = ["macroblock chunk   lag order       bits     transitions    vs raster     fold bit 8  fold UV bit 8"]
     baseline = None
     for raw in report["results"]:
         if raw["order"] == "raster":
@@ -246,7 +260,7 @@ def format_summary(report):
         macroblock = raw.get("macroblock")
         macro_label = f"{macroblock[0]}x{macroblock[1]}" if macroblock else "image"
         lines.append(f"{macro_label:<10} {raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
-                     f"{raw['order']:<8} {raw['bus_bits']:>6} "
+                     f"{raw['order']:<9} {raw['bus_bits']:>6} "
                      f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(raw['fold_only']['total']):>14} {uv_reduction:>14}")
     return "\n".join(lines)
 
