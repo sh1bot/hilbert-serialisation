@@ -123,9 +123,9 @@ hierarchical curve and a full-resolution curve.
 
 ## Delta encoding at the FIFO input
 
-The console shows one row per order with two percentage savings columns:
-`order-versus-raw` compares that order's unencoded data against unencoded raster;
-`order+delta-versus-raw` compares that order's encoded data against the same
+The console shows one row per order, its raw transition count, and two percentage savings columns:
+`vs raster` compares that order's unencoded data against unencoded raster;
+`with sm-delta` compares that order's encoded data against the same
 unencoded raster baseline. Chunk size, packing, macroblock and lag are held
 fixed. Negative values mean increased switching; a zero baseline gives `n/a`.
 

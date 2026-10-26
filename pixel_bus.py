@@ -231,7 +231,7 @@ def chunk_arg(value):
 
 def format_summary(report):
     """One row per order, both savings relative to unencoded raster."""
-    lines = ["chunk   lag order      bits  order-versus-raw  order+delta-versus-raw"]
+    lines = ["chunk   lag order      bits     transitions    vs raster  with sm-delta"]
     baseline = None
     for raw, encoded in zip(report["results"][::2], report["results"][1::2]):
         if raw["order"] == "raster":
@@ -240,7 +240,7 @@ def format_summary(report):
             return f"{100*(baseline-total)/baseline:.2f}%" if baseline else "n/a"
         lines.append(f"{raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
                      f"{raw['order']:<8} {raw['bus_bits']:>6} "
-                     f"{reduction(raw['total']):>17} {reduction(encoded['total']):>22}")
+                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(encoded['total']):>14}")
     return "\n".join(lines)
 
 
