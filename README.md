@@ -144,18 +144,23 @@ zero at each macroblock. Without `--macroblock`, the entire image is one predict
 reset region. Predictor distance is always one cycle, independently of FIFO lag.
 There is no prediction between different lanes or channels.
 
-Compute `d = (current - previous) mod 256`. Codes are:
+Compute `d = (current - previous) mod 256`, then
+`code = d XOR (0x7f if d & 0x80 else 0)`. This preserves the high bit and
+complements the low seven bits of negative deltas. It is a folded signed-byte
+representation rather than conventional sign-magnitude: -1 maps to `0x80`,
+-2 to `0x81`, and -128 to `0xff`; 0..127 are unchanged. Thus -1 and 0 differ
+in only one bit. The existing `delta-sm`/`with sm-delta` labels refer to this
+transform. Results from the earlier conventional sign-magnitude version differ.
 
-| Modular delta | Code |
-| --- | --- |
-| 0..127 | 0..127 (positive sign, seven-bit magnitude) |
-| 129..255 | `0x80 OR (256-d)` (negative sign, seven-bit magnitude) |
-| 128 | `0x80` (negative-zero code repurposed as the half-range delta) |
+The reusable `fold_signed_bytes(values)` implements this exact mapping and is
+its own inverse. The decoder applies it again, then adds the recovered modular
+delta to its previous sample modulo 256. No extra data bit is needed.
 
-The decoder maps `0x80` to a delta of 128, otherwise applies the indicated sign
-to the magnitude, adds to its reconstructed previous lane value modulo 256, and
-resets at the corresponding macroblock boundary. No extra data bit is needed.
-In the encoded rows bit 7 is the sign/escape bit, not the original sample MSB.
+`fold_biased_chroma(values)` first centers unsigned chroma around 128 (XOR 0x80),
+then applies the fold. Neutral chroma 128 maps to 0 and 127 maps to 0x80.
+Applying the signed fold directly to biased chroma would not remove the large
+127/128 threshold transition. This chroma helper is available for experiments;
+it is not automatically applied to the image planes or delta measurements.
 
 The first transfer in a macroblock is encoded against zero; subsequent transfers
 are encoded against their predecessor. FIFO transition comparisons remain

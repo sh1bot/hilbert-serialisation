@@ -144,25 +144,35 @@ def extend_lanes(words, shape, coords, grid_width, local_grid, chunk, scale, ord
     return result
 
 
+def fold_signed_bytes(values):
+    """Complement low seven bits of negative uint8 codes; self-inverse."""
+    values = np.asarray(values, dtype=np.uint8)
+    return values ^ np.where(values & 0x80, 0x7f, 0).astype(np.uint8)
+
+
+def fold_biased_chroma(values):
+    """Center unsigned chroma at 128, then fold its signed byte representation."""
+    return fold_signed_bytes(np.asarray(values, dtype=np.uint8) ^ np.uint8(0x80))
+
+
 def sign_magnitude_delta(stream, reset_interval):
-    """One predictor per lane; 0x80 encodes the modular half-range delta."""
+    """One predictor per lane; fold modular deltas using conditional low-bit XOR."""
     previous = np.empty_like(stream)
     previous[0] = 0
     previous[1:] = stream[:-1]
     previous[::reset_interval] = 0
     delta = (stream.astype(np.int16) - previous.astype(np.int16)) % 256
-    return np.where(delta < 128, delta, 128 | ((256-delta) & 127)).astype(np.uint8)
+    return fold_signed_bytes(delta.astype(np.uint8))
 
 
 def decode_sign_magnitude(stream, reset_interval):
-    """Reference decoder, including modulo wrap and the negative-zero escape."""
+    """Reference decoder: unfold bytes and accumulate modulo 256."""
     result = np.empty_like(stream)
     state = np.zeros(stream.shape[1], dtype=np.int16)
     for t, code in enumerate(stream):
         if t % reset_interval == 0:
             state[:] = 0
-        magnitude = (code & 127).astype(np.int16)
-        delta = np.where(code == 128, 128, np.where(code & 128, -magnitude, magnitude))
+        delta = fold_signed_bytes(code).astype(np.int16)
         state = (state + delta) % 256
         result[t] = state
     return result
@@ -171,7 +181,8 @@ def decode_sign_magnitude(stream, reset_interval):
 def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chunk="raster"):
     report = {"image": metadata, "boundary": "edge replication to complete macroblocks/chunks; continuous lag history; no initial load or frame wraparound",
               "lane_order": within_chunk, "macroblock": macroblock,
-              "macroblock_order": "raster", "results": []}
+              "macroblock_order": "raster",
+              "delta_transform": "d XOR (0x7f if d & 0x80 else 0)", "results": []}
     for chunk in chunks:
         width, height = metadata["width"], metadata["height"]
         if macroblock:

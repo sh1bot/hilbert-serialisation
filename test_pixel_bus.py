@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, sign_magnitude_delta, decode_sign_magnitude, format_summary
+from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, sign_magnitude_delta, decode_sign_magnitude, format_summary, fold_signed_bytes, fold_biased_chroma
 
 
 class MeasurementTests(unittest.TestCase):
@@ -76,6 +76,15 @@ class MeasurementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             extend_lanes(words['U'],shapes['U'],coords,gx,local,(4,2),(2,2),'hilbert')
 
+    def test_fold_mapping_and_chroma_center(self):
+        values = np.arange(256, dtype=np.uint8)
+        expected = np.array([d ^ (127 if d & 128 else 0) for d in range(256)], dtype=np.uint8)
+        np.testing.assert_array_equal(fold_signed_bytes(values), expected)
+        np.testing.assert_array_equal(fold_signed_bytes(fold_signed_bytes(values)), values)
+        signed = np.arange(-4,5).astype(np.uint8)
+        self.assertEqual(fold_signed_bytes(signed).tolist(), [131,130,129,128,0,1,2,3,4])
+        self.assertEqual(fold_biased_chroma([126,127,128,129,130]).tolist(), [129,128,0,1,2])
+
     def test_delta_all_byte_pairs_and_resets(self):
         a, b = np.indices((256,256), dtype=np.uint16)
         stream = np.stack([a.ravel(), b.ravel()]).astype(np.uint8)
@@ -83,7 +92,7 @@ class MeasurementTests(unittest.TestCase):
         np.testing.assert_array_equal(decode_sign_magnitude(encoded, 2), stream)
         self.assertEqual(len(np.unique(encoded[1, :256])), 256)
         special = np.array([[255], [0], [128], [128], [127]], dtype=np.uint8)
-        self.assertEqual(sign_magnitude_delta(special, 5).ravel().tolist(), [129,1,128,0,129])
+        self.assertEqual(sign_magnitude_delta(special, 5).ravel().tolist(), [128,1,255,0,128])
         for interval in (1,2,7,100):
             data = np.random.default_rng(3).integers(0,256,(53,6),dtype=np.uint8)
             np.testing.assert_array_equal(decode_sign_magnitude(sign_magnitude_delta(data, interval), interval), data)
