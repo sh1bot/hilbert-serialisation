@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes
+from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, sign_magnitude_delta, decode_sign_magnitude
 
 
 class MeasurementTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class MeasurementTests(unittest.TestCase):
                          [(1,1)], [1,3], (2,2))
         self.assertEqual(report['results'][0]['cycles'], 24)
         self.assertEqual(report['results'][0]['comparisons'], 23)
-        self.assertEqual(report['results'][3]['comparisons'], 21)
+        self.assertEqual(report['results'][6]['comparisons'], 21)
         with self.assertRaises(ValueError):
             analyze({'Y': plane}, {'Y': (1,1)}, {'width':5,'height':3}, [(2,2)], [1], (3,4))
 
@@ -73,6 +73,30 @@ class MeasurementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             extend_lanes(words['U'],shapes['U'],coords,gx,local,(4,2),(2,2),'hilbert')
 
+    def test_delta_all_byte_pairs_and_resets(self):
+        a, b = np.indices((256,256), dtype=np.uint16)
+        stream = np.stack([a.ravel(), b.ravel()]).astype(np.uint8)
+        encoded = sign_magnitude_delta(stream, 2)
+        np.testing.assert_array_equal(decode_sign_magnitude(encoded, 2), stream)
+        self.assertEqual(len(np.unique(encoded[1, :256])), 256)
+        special = np.array([[255], [0], [128], [128], [127]], dtype=np.uint8)
+        self.assertEqual(sign_magnitude_delta(special, 5).ravel().tolist(), [129,1,128,0,129])
+        for interval in (1,2,7,100):
+            data = np.random.default_rng(3).integers(0,256,(53,6),dtype=np.uint8)
+            np.testing.assert_array_equal(decode_sign_magnitude(sign_magnitude_delta(data, interval), interval), data)
+
+    def test_delta_report_matches_explicit_boundary_stream(self):
+        plane = np.array([[1,2,3,4]], dtype=np.uint8)
+        report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':4,'height':1}, [(1,1)], [1,2], (2,1))
+        encoded = np.array([[1],[1],[3],[1]], dtype=np.uint8)
+        for lag, offset in ((1,0),(2,6)):
+            raw, delta = report['results'][offset:offset+2]
+            expected = count_transitions(encoded,np.arange(4),lag)
+            self.assertEqual(delta['channels']['Y']['by_lane_lsb_first'], expected['by_lane_lsb_first'])
+            self.assertEqual(delta['comparisons'], 4-lag)
+            self.assertEqual(delta['encoding'], 'delta-sm')
+            self.assertEqual(raw['encoding'], 'raw')
+
     def test_native_jpeg_sampling(self):
         library = os.environ.get('TEST_TURBOJPEG_LIBRARY')
         if not library:
@@ -87,7 +111,7 @@ class MeasurementTests(unittest.TestCase):
                 self.assertEqual(planes['Y'].shape, (9,13))
                 self.assertEqual(planes['U'].shape, ((9+scale[1]-1)//scale[1], (13+scale[0]-1)//scale[0]))
                 result = analyze(planes, scales, meta, [scale], [1,2])
-                self.assertEqual(len(result['results']), 6)
+                self.assertEqual(len(result['results']), 12)
                 if sampling == 2:
                     self.assertEqual(result['results'][0]['bus_bits'], 48)
                     with self.assertRaises(ValueError):

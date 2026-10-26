@@ -144,6 +144,30 @@ def extend_lanes(words, shape, coords, grid_width, local_grid, chunk, scale, ord
     return result
 
 
+def sign_magnitude_delta(stream, reset_interval):
+    """One predictor per lane; 0x80 encodes the modular half-range delta."""
+    previous = np.empty_like(stream)
+    previous[0] = 0
+    previous[1:] = stream[:-1]
+    previous[::reset_interval] = 0
+    delta = (stream.astype(np.int16) - previous.astype(np.int16)) % 256
+    return np.where(delta < 128, delta, 128 | ((256-delta) & 127)).astype(np.uint8)
+
+
+def decode_sign_magnitude(stream, reset_interval):
+    """Reference decoder, including modulo wrap and the negative-zero escape."""
+    result = np.empty_like(stream)
+    state = np.zeros(stream.shape[1], dtype=np.int16)
+    for t, code in enumerate(stream):
+        if t % reset_interval == 0:
+            state[:] = 0
+        magnitude = (code & 127).astype(np.int16)
+        delta = np.where(code == 128, 128, np.where(code & 128, -magnitude, magnitude))
+        state = (state + delta) % 256
+        result[t] = state
+    return result
+
+
 def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chunk="raster"):
     report = {"image": metadata, "boundary": "edge replication to complete macroblocks/chunks; continuous lag history; no initial load or frame wraparound",
               "lane_order": within_chunk, "macroblock": macroblock,
@@ -157,25 +181,41 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
             height = math.ceil(height/macroblock[1])*macroblock[1]
         packed, shapes, gx, gy = pack_chunks(planes, scales, width, height, chunk)
         for lag in lags:
-            baseline = None
+            baselines = {}
             for order in ("raster", "z", "hilbert"):
                 coords, local_grid = transfer_layout(gx, gy, order, chunk, macroblock)
                 indices = coords[:, 1]*gx + coords[:, 0]
-                channels = {}
+                streams = {}
                 for name, words in packed.items():
                     if within_chunk == "extend":
                         words = extend_lanes(words, shapes[name], coords, gx, local_grid,
                                              chunk, scales[name], order)
-                    channels[name] = count_transitions(words, indices, lag)
-                total = sum(c["total"] for c in channels.values())
-                if baseline is None:
-                    baseline = total
-                report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
-                    "within_chunk": within_chunk, "macroblock": macroblock,
-                    "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
-                    "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
-                    "channels": channels, "total": total,
-                    "reduction_vs_raster_percent": 100*(baseline-total)/baseline if baseline else None})
+                    streams[name] = words[indices]
+                sequential = np.arange(len(indices))
+                reset_interval = local_grid[0]*local_grid[1]
+                raw_total = None
+                raw_channels = None
+                for encoding in ("raw", "delta-sm"):
+                    channels = {}
+                    for name, stream in streams.items():
+                        if encoding == "delta-sm":
+                            stream = sign_magnitude_delta(stream, reset_interval)
+                        channels[name] = count_transitions(stream, sequential, lag)
+                    total = sum(c["total"] for c in channels.values())
+                    if encoding == "raw":
+                        raw_total, raw_channels = total, channels
+                    for name, channel in channels.items():
+                        raw = raw_channels[name]["total"]
+                        channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
+                    baseline = baselines.setdefault(encoding, total)
+                    report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
+                        "encoding": encoding, "predictor_reset_cycles": reset_interval,
+                        "within_chunk": within_chunk, "macroblock": macroblock,
+                        "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
+                        "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
+                        "channels": channels, "total": total,
+                        "reduction_vs_raw_percent": 100*(raw_total-total)/raw_total if raw_total else None,
+                        "reduction_vs_raster_percent": 100*(baseline-total)/baseline if baseline else None})
     return report
 
 
@@ -211,12 +251,14 @@ def main():
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         parser.exit(2, f"error: {exc}\n")
     print(meta["decode"])
-    print("chunk   lag order      bits     transitions  reduction vs raster   channel totals")
+    print("chunk   lag order    encoding   bits     transitions   vs raster      vs raw   channel totals")
     for r in report["results"]:
         reduction = r["reduction_vs_raster_percent"]
         delta = "n/a" if reduction is None else f"{reduction:.2f}%"
+        raw_reduction = r["reduction_vs_raw_percent"]
+        raw_delta = "n/a" if raw_reduction is None else f"{raw_reduction:.2f}%"
         channels = " ".join(f"{k}={v['total']}" for k, v in r["channels"].items())
-        print(f"{r['chunk'][0]}x{r['chunk'][1]:<4} {r['lag']:>3} {r['order']:<8} {r['bus_bits']:>6} {r['total']:>15} {delta:>20}   {channels}")
+        print(f"{r['chunk'][0]}x{r['chunk'][1]:<4} {r['lag']:>3} {r['order']:<8} {r['encoding']:<8} {r['bus_bits']:>6} {r['total']:>15} {delta:>11} {raw_delta:>11}   {channels}")
     if args.json:
         args.json.write_text(json.dumps(report, indent=2) + "\n")
 

@@ -120,3 +120,39 @@ rather than fixed spatial positions. Bits within each sample remain LSB first.
 The tests also verify raster macroblock ordering, continuous comparisons across
 boundaries, the four Hilbert orientations, and agreement between the flattened
 hierarchical curve and a full-resolution curve.
+
+## Delta encoding at the FIFO input
+
+Every configuration now produces paired `raw` and `delta-sm` rows automatically.
+`vs raw` gives the percentage toggle reduction from enabling the encoder for
+that exact traversal, chunk packing and lag. Negative values mean an increase.
+`vs raster` compares against raster with the **same encoding**. JSON also gives
+per-channel `reduction_vs_raw_percent`; zero denominators produce null.
+
+The predictor stores the previous complete transfer, independently for each
+8-bit sample lane, after any within-chunk permutation. It resets every lane to
+zero at each macroblock. Without `--macroblock`, the entire image is one predictor
+reset region. Predictor distance is always one cycle, independently of FIFO lag.
+There is no prediction between different lanes or channels.
+
+Compute `d = (current - previous) mod 256`. Codes are:
+
+| Modular delta | Code |
+| --- | --- |
+| 0..127 | 0..127 (positive sign, seven-bit magnitude) |
+| 129..255 | `0x80 OR (256-d)` (negative sign, seven-bit magnitude) |
+| 128 | `0x80` (negative-zero code repurposed as the half-range delta) |
+
+The decoder maps `0x80` to a delta of 128, otherwise applies the indicated sign
+to the magnitude, adds to its reconstructed previous lane value modulo 256, and
+resets at the corresponding macroblock boundary. No extra data bit is needed.
+In the encoded rows bit 7 is the sign/escape bit, not the original sample MSB.
+
+The first transfer in a macroblock is encoded against zero; subsequent transfers
+are encoded against their predecessor. FIFO transition comparisons remain
+continuous across macroblocks, including encoded boundary transfers. As before,
+there is no comparison against an initial FIFO value. Decoder resets must track
+macroblock boundaries in the delayed output stream. Scores cover encoded FIFO
+data only; predictor flops, encoder/decoder logic and boundary signalling are
+excluded. A reference decoder is included and tested exhaustively over all
+65,536 previous/current byte pairs, with additional multi-cycle reset tests.
