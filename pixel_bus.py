@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count data-lane transitions for fixed chunks in three spatial orders."""
+"""Count data-lane transitions for chunk traversals, optionally within raster macroblocks."""
 import argparse
 import json
 import math
@@ -101,21 +101,77 @@ def count_transitions(words, indices, lag, batch_size=65536):
             "transition_fraction": total/(comparisons*words.shape[1]*8) if comparisons else None}
 
 
-def analyze(planes, scales, metadata, chunks, lags):
-    report = {"image": metadata, "boundary": "edge replication; no initial load or frame wraparound",
-              "lane_order": "channel-local row-major sample positions, bits LSB first", "results": []}
+def transfer_layout(gx, gy, order, chunk, macroblock=None):
+    """Raster macroblocks, traversal-local chunks; never reset the lag history."""
+    cw, ch = chunk
+    if macroblock is None:
+        return coordinates(gx, gy, order), (gx, gy)
+    mw, mh = macroblock
+    if mw % cw or mh % ch:
+        raise ValueError("Macroblock dimensions must be multiples of chunk dimensions")
+    mx, my = mw // cw, mh // ch
+    local = coordinates(mx, my, order)
+    coords = [(bx+x, by+y) for by in range(0, gy, my)
+              for bx in range(0, gx, mx) for x, y in local]
+    return np.asarray(coords, dtype=np.intp), (mx, my)
+
+
+def extend_lanes(words, shape, coords, grid_width, local_grid, chunk, scale, order):
+    """Continue the parent curve down to sample lanes, inheriting its orientation."""
+    ph, pw = shape
+    cw, ch = chunk
+    sx, sy = scale
+    mx, my = local_grid
+    side = mx*cw
+    if cw != ch or side != my*ch or side & (side-1) or cw & (cw-1):
+        raise ValueError("Extended packing requires square power-of-two chunks and macroblocks "
+                         "(or a square power-of-two padded image when no macroblock is given)")
+    result = np.empty_like(words)
+    permutations = {}
+    for x, y in coords:
+        lx, ly = int(x % mx), int(y % my)
+        key = (lx, ly)
+        if key not in permutations:
+            samples = [(u, v) for v in range(ph) for u in range(pw)]
+            if order == "hilbert":
+                samples.sort(key=lambda uv: hilbert_index(lx*cw+uv[0]*sx, ly*ch+uv[1]*sy, side))
+            elif order == "z":
+                # Morton ordering has the same orientation in every child.
+                samples = list(map(tuple, coordinates(pw, ph, "z")))
+            permutations[key] = [v*pw+u for u, v in samples]
+        index = y*grid_width+x
+        result[index] = words[index, permutations[key]]
+    return result
+
+
+def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chunk="raster"):
+    report = {"image": metadata, "boundary": "edge replication to complete macroblocks/chunks; continuous lag history; no initial load or frame wraparound",
+              "lane_order": within_chunk, "macroblock": macroblock,
+              "macroblock_order": "raster", "results": []}
     for chunk in chunks:
-        packed, shapes, gx, gy = pack_chunks(planes, scales, metadata["width"], metadata["height"], chunk)
+        width, height = metadata["width"], metadata["height"]
+        if macroblock:
+            if macroblock[0] % chunk[0] or macroblock[1] % chunk[1]:
+                raise ValueError("Macroblock dimensions must be multiples of chunk dimensions")
+            width = math.ceil(width/macroblock[0])*macroblock[0]
+            height = math.ceil(height/macroblock[1])*macroblock[1]
+        packed, shapes, gx, gy = pack_chunks(planes, scales, width, height, chunk)
         for lag in lags:
             baseline = None
             for order in ("raster", "z", "hilbert"):
-                coords = coordinates(gx, gy, order)
+                coords, local_grid = transfer_layout(gx, gy, order, chunk, macroblock)
                 indices = coords[:, 1]*gx + coords[:, 0]
-                channels = {name: count_transitions(words, indices, lag) for name, words in packed.items()}
+                channels = {}
+                for name, words in packed.items():
+                    if within_chunk == "extend":
+                        words = extend_lanes(words, shapes[name], coords, gx, local_grid,
+                                             chunk, scales[name], order)
+                    channels[name] = count_transitions(words, indices, lag)
                 total = sum(c["total"] for c in channels.values())
                 if baseline is None:
                     baseline = total
                 report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
+                    "within_chunk": within_chunk, "macroblock": macroblock,
                     "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
                     "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
                     "channels": channels, "total": total,
@@ -137,6 +193,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path)
     parser.add_argument("--chunk", type=chunk_arg, action="append", help="repeatable WIDTHxHEIGHT; default sampling minimum")
+    parser.add_argument("--macroblock", type=chunk_arg, help="WIDTHxHEIGHT; macroblocks visited in raster order")
+    parser.add_argument("--within-chunk", choices=("raster", "extend"), default="raster",
+                        help="fixed raster lanes or continue traversal into chunk sample lanes")
     parser.add_argument("--lag", type=int, action="append", help="repeatable positive lag; default 1")
     parser.add_argument("--mode", choices=("auto", "rgb", "native"), default="auto")
     parser.add_argument("--turbojpeg-library", help="optional path to libturbojpeg")
@@ -147,7 +206,8 @@ def main():
     try:
         planes, scales, meta = load_image(args.image, args.mode, args.turbojpeg_library)
         default = (max(s[0] for s in scales.values()), max(s[1] for s in scales.values()))
-        report = analyze(planes, scales, meta, args.chunk or [default], args.lag or [1])
+        report = analyze(planes, scales, meta, args.chunk or [default], args.lag or [1],
+                         args.macroblock, args.within_chunk)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         parser.exit(2, f"error: {exc}\n")
     print(meta["decode"])

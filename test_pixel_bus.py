@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze
+from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes
 
 
 class MeasurementTests(unittest.TestCase):
@@ -35,6 +35,43 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual((gx,gy), (3,2))
         self.assertEqual(words['R'][0].tolist(), [0,1,5,6])
         self.assertEqual(words['R'][-1].tolist(), [14,14,14,14])
+
+    def test_macroblock_raster_and_cross_boundary_lag(self):
+        coords, _ = transfer_layout(4, 4, 'hilbert', (1,1), (2,2))
+        self.assertEqual(coords[:8].tolist(),
+                         [[0,0],[0,1],[1,1],[1,0],[2,0],[2,1],[3,1],[3,0]])
+        plane = np.arange(15, dtype=np.uint8).reshape(3,5)
+        report = analyze({'Y': plane}, {'Y': (1,1)}, {'width':5,'height':3},
+                         [(1,1)], [1,3], (2,2))
+        self.assertEqual(report['results'][0]['cycles'], 24)
+        self.assertEqual(report['results'][0]['comparisons'], 23)
+        self.assertEqual(report['results'][3]['comparisons'], 21)
+        with self.assertRaises(ValueError):
+            analyze({'Y': plane}, {'Y': (1,1)}, {'width':5,'height':3}, [(2,2)], [1], (3,4))
+
+    def test_extended_curve_matches_full_resolution_curve(self):
+        plane = np.arange(64, dtype=np.uint8).reshape(8,8)
+        words, shapes, gx, gy = pack_chunks({'Y':plane}, {'Y':(1,1)},8,8,(2,2))
+        for order in ('raster', 'z', 'hilbert'):
+            coords, local = transfer_layout(gx,gy,order,(2,2),(8,8))
+            extended = extend_lanes(words['Y'],shapes['Y'],coords,gx,local,(2,2),(1,1),order)
+            indices = coords[:,1]*gx+coords[:,0]
+            if order != 'raster':
+                full = coordinates(8,8,order)
+                np.testing.assert_array_equal(extended[indices].ravel(), plane[full[:,1],full[:,0]])
+            else:
+                np.testing.assert_array_equal(extended, words['Y'])
+            if order == 'hilbert':
+                permutations = {tuple((row // 8 % 2)*2 + row % 2) for row in extended}
+                self.assertEqual(len(permutations), 4)
+        # Subsampled channels retain all their own sample lanes.
+        chroma = plane[::2,::2]
+        words, shapes, gx, gy = pack_chunks({'U':chroma}, {'U':(2,2)},8,8,(4,4))
+        coords, local = transfer_layout(gx,gy,'hilbert',(4,4),(8,8))
+        ext = extend_lanes(words['U'],shapes['U'],coords,gx,local,(4,4),(2,2),'hilbert')
+        np.testing.assert_array_equal(np.sort(ext.ravel()), np.sort(chroma.ravel()))
+        with self.assertRaises(ValueError):
+            extend_lanes(words['U'],shapes['U'],coords,gx,local,(4,2),(2,2),'hilbert')
 
     def test_native_jpeg_sampling(self):
         library = os.environ.get('TEST_TURBOJPEG_LIBRARY')

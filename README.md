@@ -78,3 +78,45 @@ TEST_TURBOJPEG_LIBRARY=/path/to/libturbojpeg.so python -m unittest -v
 Tests cover traversal coverage and Hilbert adjacency, scalar-reference XOR
 counts at several lags, lane packing and edge replication, and native JPEG
 sampling on odd dimensions. No external image fixtures are needed.
+
+## Tiered traversal
+
+```sh
+python pixel_bus.py photo.jpg --macroblock 64x64 --chunk 4x4 --lag 1 --json tiered.json
+python pixel_bus.py photo.jpg --macroblock 64x64 --chunk 4x4 --within-chunk extend --json extended.json
+```
+
+`--macroblock WIDTHxHEIGHT` visits macroblocks in raster order. Within each
+macroblock the experiment visits chunks in raster, Z, or Hilbert order, starting
+the same curve orientation in every macroblock. Both macroblock dimensions must
+be multiples of the corresponding chunk dimensions. Omit this option to retain
+whole-image chunk traversal. Edge replication fills complete edge macroblocks;
+all their chunks are transferred, including chunks entirely in the padded area.
+The reported cycle count includes that padding. Transition/lag history continues
+across macroblock boundaries; it is never reset there.
+
+`--within-chunk raster` is the default: fixed row-major sample lanes inside each
+chunk, regardless of its parent curve orientation.
+
+`--within-chunk extend` continues the selected parent curve down into the chunk.
+All samples still transfer simultaneously; the option changes their assignment
+to bus lanes. Hilbert inherits the enclosing curve's orientation, giving four
+possible lane permutations for nontrivial square power-of-two chunks. Z-order
+uses a fixed local Morton permutation; raster retains row-major packing. With
+all other settings fixed this gives four distinct experiments in the usual case:
+raster, Z, Hilbert with raster lanes, and Hilbert with inherited lanes. Fixed
+local Z packing is just a common lane permutation, so its aggregate toggle counts
+are unchanged, although its per-lane labels differ. Degenerate chunks may make
+some of these cases identical.
+
+Extended packing currently requires square power-of-two chunks and square
+power-of-two macroblocks. Without an explicit macroblock, the chunk-padded image
+must form a square power-of-two region. Rectangular geometry is supported in the
+default raster packing mode. Each subsampled channel orders its own samples by
+their full-resolution positions on the parent curve, with no channel mixing.
+In extended mode, JSON lane numbers identify positions in the inherited scan,
+rather than fixed spatial positions. Bits within each sample remain LSB first.
+
+The tests also verify raster macroblock ordering, continuous comparisons across
+boundaries, the four Hilbert orientations, and agreement between the flattened
+hierarchical curve and a full-resolution curve.
