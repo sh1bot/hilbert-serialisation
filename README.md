@@ -124,73 +124,26 @@ The tests also verify raster macroblock ordering, continuous comparisons across
 boundaries, the four Hilbert orientations, and agreement between the flattened
 hierarchical curve and a full-resolution curve.
 
-## Delta encoding at the FIFO input
+## Folding comparisons
 
-The console shows one row per order, its raw transition count, and two percentage savings columns:
-`vs raster` compares that order's unencoded data against unencoded raster;
-`with sm-delta` compares that order's encoded data against the same
-unencoded raster baseline. Chunk size, packing, macroblock and lag are held
-fixed. Negative values mean increased switching; a zero baseline gives `n/a`.
+The console shows raw `transitions` and three savings columns: `vs raster`,
+`fold only` (all channels), and `fold UV only` (Y unchanged). All use unencoded
+raster for the same chunk, macroblock, packing and lag as their baseline.
+Positive means fewer transitions; negative means more. Zero baselines give n/a.
+UV-only folding is n/a for RGB and grayscale inputs.
 
-JSON retains paired `raw` and `delta-sm` records and full per-channel/per-bit
-counts. Both `reduction_vs_raw_percent` and `reduction_vs_raster_percent` use
-unencoded raster as the baseline, matching the console. Each record includes
-`baseline_raw_raster_total`; per-channel reductions use that channel's unencoded
-raster count. Zero denominators produce null.
+`fold_signed_bytes(values)` applies `v XOR (0x7f if v & 0x80 else 0)` to each
+byte independently. This stateless mapping is its own inverse. Both folding
+columns use it directly, without centering chroma. The separate reusable
+`fold_biased_chroma` helper centers around 128 before folding, but is not applied
+automatically by the comparisons.
 
-The predictor stores the previous complete transfer, independently for each
-8-bit sample lane, after any within-chunk permutation. It resets every lane to
-zero at each macroblock. Without `--macroblock`, the entire image is one predictor
-reset region. Predictor distance is always one cycle, independently of FIFO lag.
-There is no prediction between different lanes or channels.
-
-Compute `d = (current - previous) mod 256`, then
-`code = d XOR (0x7f if d & 0x80 else 0)`. This preserves the high bit and
-complements the low seven bits of negative deltas. It is a folded signed-byte
-representation rather than conventional sign-magnitude: -1 maps to `0x80`,
--2 to `0x81`, and -128 to `0xff`; 0..127 are unchanged. Thus -1 and 0 differ
-in only one bit. The existing `delta-sm`/`with sm-delta` labels refer to this
-transform. Results from the earlier conventional sign-magnitude version differ.
-
-The reusable `fold_signed_bytes(values)` implements this exact mapping and is
-its own inverse. The decoder applies it again, then adds the recovered modular
-delta to its previous sample modulo 256. No extra data bit is needed.
-
-`fold_biased_chroma(values)` first centers unsigned chroma around 128 (XOR 0x80),
-then applies the fold. Neutral chroma 128 maps to 0 and 127 maps to 0x80.
-Applying the signed fold directly to biased chroma would not remove the large
-127/128 threshold transition. This chroma helper is available for experiments;
-it is not automatically applied to the image planes or delta measurements.
-
-The first transfer in a macroblock is encoded against zero; subsequent transfers
-are encoded against their predecessor. FIFO transition comparisons remain
-continuous across macroblocks, including encoded boundary transfers. As before,
-there is no comparison against an initial FIFO value. Decoder resets must track
-macroblock boundaries in the delayed output stream. Scores cover encoded FIFO
-data only; predictor flops, encoder/decoder logic and boundary signalling are
-excluded. A reference decoder is included and tested exhaustively over all
-65,536 previous/current byte pairs, with additional multi-cycle reset tests.
+JSON has one result per traversal configuration, containing raw per-channel,
+per-lane and per-bit counts plus `fold_only` and `fold_uv_only` measurements.
+Both `reduction_vs_raw_percent` and `reduction_vs_raster_percent` use raw raster
+as their baseline. Each result includes `baseline_raw_raster_total`; per-channel
+reductions use that channel's raw raster count. Undefined ratios are null.
 
 ```sh
 python pixel_bus.py photo.jpg --macroblock 32x32 --macroblock 64x64 --chunk 4x4 --lag 1 --lag 4
 ```
-
-## Folding without prediction
-
-The `fold only` console column applies `fold_signed_bytes` directly to each
-sample in the row's traversal, with no subtraction or predictor state. Like
-`vs raster` and `with sm-delta`, it reports savings against unencoded raster
-for the same geometry and lag. Raw transition counts remain in `transitions`.
-When macroblock and chunk sizes match, `fold only` and `with sm-delta` must
-match because every predictor resets before every transfer. This direct fold
-does not center biased chroma first; it isolates the exact fold applied by the
-delta encoder when its predictor is zero.
-
-JSON records include a `fold_only` object with total, per-channel, per-lane and
-per-bit measurements and percentage savings versus raw raster.
-
-The `fold UV only` column uses the row's traversal while leaving Y samples
-unchanged and directly folding U/V bytes. It also compares against raw raster.
-It does not apply the chroma-centering helper: it isolates the benefit of the
-same direct fold on chroma alone. For RGB or grayscale inputs it shows `n/a`.
-JSON includes `fold_uv_only` measurements, or null when not applicable.

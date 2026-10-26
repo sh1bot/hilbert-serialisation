@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, sign_magnitude_delta, decode_sign_magnitude, format_summary, fold_signed_bytes, fold_biased_chroma
+from pixel_bus import coordinates, count_transitions, load_image, pack_chunks, analyze, transfer_layout, extend_lanes, format_summary, fold_signed_bytes, fold_biased_chroma
 
 
 class MeasurementTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class MeasurementTests(unittest.TestCase):
                          [(1,1)], [1,3], (2,2))
         self.assertEqual(report['results'][0]['cycles'], 24)
         self.assertEqual(report['results'][0]['comparisons'], 23)
-        self.assertEqual(report['results'][6]['comparisons'], 21)
+        self.assertEqual(report['results'][3]['comparisons'], 21)
         with self.assertRaises(ValueError):
             analyze({'Y': plane}, {'Y': (1,1)}, {'width':5,'height':3}, [(2,2)], [1], (3,4))
 
@@ -85,60 +85,33 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(fold_signed_bytes(signed).tolist(), [131,130,129,128,0,1,2,3,4])
         self.assertEqual(fold_biased_chroma([126,127,128,129,130]).tolist(), [129,128,0,1,2])
 
-    def test_delta_all_byte_pairs_and_resets(self):
-        a, b = np.indices((256,256), dtype=np.uint16)
-        stream = np.stack([a.ravel(), b.ravel()]).astype(np.uint8)
-        encoded = sign_magnitude_delta(stream, 2)
-        np.testing.assert_array_equal(decode_sign_magnitude(encoded, 2), stream)
-        self.assertEqual(len(np.unique(encoded[1, :256])), 256)
-        special = np.array([[255], [0], [128], [128], [127]], dtype=np.uint8)
-        self.assertEqual(sign_magnitude_delta(special, 5).ravel().tolist(), [128,1,255,0,128])
-        for interval in (1,2,7,100):
-            data = np.random.default_rng(3).integers(0,256,(53,6),dtype=np.uint8)
-            np.testing.assert_array_equal(decode_sign_magnitude(sign_magnitude_delta(data, interval), interval), data)
-
-    def test_delta_report_matches_explicit_boundary_stream(self):
-        plane = np.array([[1,2,3,4]], dtype=np.uint8)
-        report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':4,'height':1}, [(1,1)], [1,2], (2,1))
-        encoded = np.array([[1],[1],[3],[1]], dtype=np.uint8)
-        for lag, offset in ((1,0),(2,6)):
-            raw, delta = report['results'][offset:offset+2]
-            expected = count_transitions(encoded,np.arange(4),lag)
-            self.assertEqual(delta['channels']['Y']['by_lane_lsb_first'], expected['by_lane_lsb_first'])
-            self.assertEqual(delta['comparisons'], 4-lag)
-            self.assertEqual(delta['encoding'], 'delta-sm')
-            self.assertEqual(raw['encoding'], 'raw')
-
     def test_summary_uses_raw_raster_baseline(self):
-        report = {"results": [dict(order=order, encoding=encoding, total=total,
+        report = {"results": [dict(order=order, total=total,
                   chunk=[2,2], lag=1, bus_bits=96, fold_only={"total":70})
-                  for order, encoding, total in [
-                      ('raster','raw',100), ('raster','delta-sm',80),
-                      ('z','raw',90), ('z','delta-sm',60),
-                      ('hilbert','raw',110), ('hilbert','delta-sm',50)]]}
+                  for order, total in [
+                      ('raster',100),
+                      ('z',90),
+                      ('hilbert',110)]]}
         summary = format_summary(report)
         self.assertEqual(len(summary.splitlines()), 4)
         self.assertNotIn('delta-sm', summary)
         self.assertNotIn('encoding', summary)
         self.assertIn('transitions', summary.splitlines()[0])
         self.assertIn('vs raster', summary.splitlines()[0])
-        self.assertIn('with sm-delta', summary.splitlines()[0])
         self.assertIn('fold only', summary.splitlines()[0])
         self.assertIn('30.00%', summary.splitlines()[2])
         self.assertEqual(summary.splitlines()[2].split()[5], '90')
         self.assertIn('10.00%', summary.splitlines()[2])
-        self.assertIn('40.00%', summary.splitlines()[2])
         self.assertIn('-10.00%', summary.splitlines()[3])
-        self.assertIn('50.00%', summary.splitlines()[3])
         report['results'][0]['total'] = 0
         self.assertIn('n/a', format_summary(report))
 
-    def test_json_uses_raw_raster_for_every_encoding(self):
+    def test_json_uses_raw_raster_baseline(self):
         plane = np.random.default_rng(17).integers(0,256,(8,8),dtype=np.uint8)
         report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':8,'height':8},
                          [(1,1),(2,2)], [1,3], (4,4))
-        for start in range(0,len(report['results']),6):
-            rows = report['results'][start:start+6]
+        for start in range(0,len(report['results']),3):
+            rows = report['results'][start:start+3]
             baseline = rows[0]['total']
             for row in rows:
                 expected = 100*(baseline-row['total'])/baseline
@@ -156,21 +129,12 @@ class MeasurementTests(unittest.TestCase):
                 '--lag','1','--lag','3','--json',str(output)], check=True, capture_output=True, text=True)
             report = json.loads(output.read_text())
             self.assertEqual(report['macroblocks'], [[4,4],[8,8]])
-            self.assertEqual(len(report['results']), 24)
+            self.assertEqual(len(report['results']), 12)
             self.assertEqual({(tuple(r['macroblock']),r['lag']) for r in report['results']},
                              {((4,4),1),((4,4),3),((8,8),1),((8,8),3)})
             self.assertEqual(len(run.stdout.splitlines()),14)
             self.assertIn('4x4', run.stdout)
             self.assertIn('8x8', run.stdout)
-
-    def test_fold_only_matches_delta_when_predictor_always_resets(self):
-        plane = np.random.default_rng(4).integers(0,256,(8,8),dtype=np.uint8)
-        report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':8,'height':8},
-                         [(2,2)], [1,3], (2,2))
-        for raw, delta in zip(report['results'][::2],report['results'][1::2]):
-            self.assertEqual(raw['fold_only']['total'], delta['total'])
-            self.assertEqual(raw['fold_only']['channels']['Y']['by_lane_lsb_first'],
-                             delta['channels']['Y']['by_lane_lsb_first'])
 
     def test_fold_uv_only_preserves_y_and_folds_chroma(self):
         rng = np.random.default_rng(8)
@@ -179,7 +143,7 @@ class MeasurementTests(unittest.TestCase):
                   'V':rng.integers(0,256,(4,4),dtype=np.uint8)}
         scales = {'Y':(1,1),'U':(2,2),'V':(2,2)}
         report = analyze(planes,scales,{'width':8,'height':8},[(2,2)],[1,3],(4,4))
-        for raw in report['results'][::2]:
+        for raw in report['results']:
             uv = raw['fold_uv_only']
             self.assertEqual(uv['channels']['Y']['by_lane_lsb_first'],raw['channels']['Y']['by_lane_lsb_first'])
             for name in ('U','V'):
@@ -206,7 +170,7 @@ class MeasurementTests(unittest.TestCase):
                 self.assertEqual(planes['Y'].shape, (9,13))
                 self.assertEqual(planes['U'].shape, ((9+scale[1]-1)//scale[1], (13+scale[0]-1)//scale[0]))
                 result = analyze(planes, scales, meta, [scale], [1,2])
-                self.assertEqual(len(result['results']), 12)
+                self.assertEqual(len(result['results']), 6)
                 if sampling == 2:
                     self.assertEqual(result['results'][0]['bus_bits'], 48)
                     with self.assertRaises(ValueError):

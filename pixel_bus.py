@@ -155,34 +155,10 @@ def fold_biased_chroma(values):
     return fold_signed_bytes(np.asarray(values, dtype=np.uint8) ^ np.uint8(0x80))
 
 
-def sign_magnitude_delta(stream, reset_interval):
-    """One predictor per lane; fold modular deltas using conditional low-bit XOR."""
-    previous = np.empty_like(stream)
-    previous[0] = 0
-    previous[1:] = stream[:-1]
-    previous[::reset_interval] = 0
-    delta = (stream.astype(np.int16) - previous.astype(np.int16)) % 256
-    return fold_signed_bytes(delta.astype(np.uint8))
-
-
-def decode_sign_magnitude(stream, reset_interval):
-    """Reference decoder: unfold bytes and accumulate modulo 256."""
-    result = np.empty_like(stream)
-    state = np.zeros(stream.shape[1], dtype=np.int16)
-    for t, code in enumerate(stream):
-        if t % reset_interval == 0:
-            state[:] = 0
-        delta = fold_signed_bytes(code).astype(np.int16)
-        state = (state + delta) % 256
-        result[t] = state
-    return result
-
-
 def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chunk="raster"):
     report = {"image": metadata, "boundary": "edge replication to complete macroblocks/chunks; continuous lag history; no initial load or frame wraparound",
               "lane_order": within_chunk, "macroblock": macroblock,
-              "macroblock_order": "raster",
-              "delta_transform": "d XOR (0x7f if d & 0x80 else 0)", "results": []}
+              "macroblock_order": "raster", "results": []}
     for chunk in chunks:
         width, height = metadata["width"], metadata["height"]
         if macroblock:
@@ -204,7 +180,6 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                                              chunk, scales[name], order)
                     streams[name] = words[indices]
                 sequential = np.arange(len(indices))
-                reset_interval = local_grid[0]*local_grid[1]
                 folded_channels = {name: count_transitions(fold_signed_bytes(stream), sequential, lag)
                                    for name, stream in streams.items()}
                 folded_total = sum(c["total"] for c in folded_channels.values())
@@ -213,41 +188,37 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                                 for name, stream in streams.items()}
                                if "U" in streams and "V" in streams else None)
                 uv_total = sum(c["total"] for c in uv_channels.values()) if uv_channels else None
-                for encoding in ("raw", "delta-sm"):
-                    channels = {}
-                    for name, stream in streams.items():
-                        if encoding == "delta-sm":
-                            stream = sign_magnitude_delta(stream, reset_interval)
-                        channels[name] = count_transitions(stream, sequential, lag)
-                    total = sum(c["total"] for c in channels.values())
-                    if baseline is None:
-                        baseline = total
-                        baseline_channels = {name: channel["total"] for name, channel in channels.items()}
-                    for name, channel in channels.items():
+                channels = {}
+                for name, stream in streams.items():
+                    channels[name] = count_transitions(stream, sequential, lag)
+                total = sum(c["total"] for c in channels.values())
+                if baseline is None:
+                    baseline = total
+                    baseline_channels = {name: channel["total"] for name, channel in channels.items()}
+                for name, channel in channels.items():
+                    raw = baseline_channels[name]
+                    channel["baseline_raw_raster_total"] = raw
+                    channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
+                for name, channel in folded_channels.items():
+                    raw = baseline_channels[name]
+                    channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
+                if uv_channels:
+                    for name, channel in uv_channels.items():
                         raw = baseline_channels[name]
-                        channel["baseline_raw_raster_total"] = raw
                         channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
-                    for name, channel in folded_channels.items():
-                        raw = baseline_channels[name]
-                        channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
-                    if uv_channels:
-                        for name, channel in uv_channels.items():
-                            raw = baseline_channels[name]
-                            channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
-                    report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
-                        "encoding": encoding, "predictor_reset_cycles": reset_interval,
+                report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
                         "fold_uv_only": ({"total": uv_total, "channels": uv_channels,
-                                          "reduction_vs_raw_percent": 100*(baseline-uv_total)/baseline if baseline else None}
-                                         if uv_channels else None),
-                        "fold_only": {"total": folded_total, "channels": folded_channels,
-                                      "reduction_vs_raw_percent": 100*(baseline-folded_total)/baseline if baseline else None},
-                        "within_chunk": within_chunk, "macroblock": macroblock,
-                        "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
-                        "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
-                        "channels": channels, "total": total,
-                        "baseline_raw_raster_total": baseline,
-                        "reduction_vs_raw_percent": 100*(baseline-total)/baseline if baseline else None,
-                        "reduction_vs_raster_percent": 100*(baseline-total)/baseline if baseline else None})
+                                      "reduction_vs_raw_percent": 100*(baseline-uv_total)/baseline if baseline else None}
+                                     if uv_channels else None),
+                    "fold_only": {"total": folded_total, "channels": folded_channels,
+                                  "reduction_vs_raw_percent": 100*(baseline-folded_total)/baseline if baseline else None},
+                    "within_chunk": within_chunk, "macroblock": macroblock,
+                    "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
+                    "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
+                    "channels": channels, "total": total,
+                    "baseline_raw_raster_total": baseline,
+                    "reduction_vs_raw_percent": 100*(baseline-total)/baseline if baseline else None,
+                    "reduction_vs_raster_percent": 100*(baseline-total)/baseline if baseline else None})
     return report
 
 
@@ -263,9 +234,9 @@ def chunk_arg(value):
 
 def format_summary(report):
     """One row per order, all savings relative to unencoded raster."""
-    lines = ["macroblock chunk   lag order      bits     transitions    vs raster      fold only   fold UV only  with sm-delta"]
+    lines = ["macroblock chunk   lag order      bits     transitions    vs raster      fold only   fold UV only"]
     baseline = None
-    for raw, encoded in zip(report["results"][::2], report["results"][1::2]):
+    for raw in report["results"]:
         if raw["order"] == "raster":
             baseline = raw["total"]
         def reduction(total):
@@ -276,7 +247,7 @@ def format_summary(report):
         macro_label = f"{macroblock[0]}x{macroblock[1]}" if macroblock else "image"
         lines.append(f"{macro_label:<10} {raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
                      f"{raw['order']:<8} {raw['bus_bits']:>6} "
-                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(raw['fold_only']['total']):>14} {uv_reduction:>14} {reduction(encoded['total']):>14}")
+                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(raw['fold_only']['total']):>14} {uv_reduction:>14}")
     return "\n".join(lines)
 
 

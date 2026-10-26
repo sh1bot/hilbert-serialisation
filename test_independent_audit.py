@@ -5,8 +5,8 @@ from pixel_bus import analyze
 
 class IndependentAuditTests(unittest.TestCase):
     def test_scalar_reference(self):
-        # Independent, direct pixel reads and scalar encoding/counting. No production
-        # packing, delta transform, traversal, or transition helpers are used.
+        # Independent, direct pixel reads and scalar folding/counting. No production
+        # packing, folding, traversal, or transition helpers are used.
         local_orders={'raster':[(0,0),(1,0),(0,1),(1,1)],
                       'z':[(0,0),(1,0),(0,1),(1,1)],
                       'hilbert':[(0,0),(0,1),(1,1),(1,0)]}
@@ -21,20 +21,18 @@ class IndependentAuditTests(unittest.TestCase):
                         raw=[];encoded=[]
                         for by in range(0,7,mh):
                             for bx in range(0,11,mw):
-                                previous=[0]*(cw*ch)
                                 for cx,cy in coords:
                                     current=[int(plane[min(by+cy*ch+v,6),min(bx+cx*cw+u,10)])
                                              for v in range(ch) for u in range(cw)]
-                                    codes=[]
-                                    for a,b in zip(current,previous):
-                                        d=(a-b)&255
-                                        codes.append(d ^ (127 if d&128 else 0))
-                                    raw.append(current);encoded.append(codes);previous=current
-                        for kind,stream in [('raw',raw),('delta-sm',encoded)]:
+                                    raw.append(current)
+                                    encoded.append([v ^ (127 if v & 128 else 0) for v in current])
+                        for kind,stream in [('raw',raw),('fold',encoded)]:
                             counts=[[sum(((stream[t][lane]^stream[t-lag][lane])>>bit)&1
                                          for t in range(lag,len(stream))) for bit in range(8)]
                                     for lane in range(cw*ch)]
-                            result=next(r for r in report['results'] if r['order']==order and r['encoding']==kind)
+                            result=next(r for r in report['results'] if r['order']==order)
+                            if kind == 'fold':
+                                result = result['fold_only']
                             self.assertEqual(counts, result['channels']['Y']['by_lane_lsb_first'], (seed,cw,ch,lag,order,kind))
                             checks+=1
         self.assertEqual(checks, 576)
