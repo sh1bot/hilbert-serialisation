@@ -133,9 +133,10 @@ unencoded raster baseline. Chunk size, packing, macroblock and lag are held
 fixed. Negative values mean increased switching; a zero baseline gives `n/a`.
 
 JSON retains paired `raw` and `delta-sm` records and full per-channel/per-bit
-counts. Its `reduction_vs_raw_percent` compares encoded data with the same
-order's unencoded data; `reduction_vs_raster_percent` compares orders with the
-same encoding. Zero denominators produce null.
+counts. Both `reduction_vs_raw_percent` and `reduction_vs_raster_percent` use
+unencoded raster as the baseline, matching the console. Each record includes
+`baseline_raw_raster_total`; per-channel reductions use that channel's unencoded
+raster count. Zero denominators produce null.
 
 The predictor stores the previous complete transfer, independently for each
 8-bit sample lane, after any within-chunk permutation. It resets every lane to

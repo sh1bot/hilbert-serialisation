@@ -122,6 +122,20 @@ class MeasurementTests(unittest.TestCase):
         report['results'][0]['total'] = 0
         self.assertIn('n/a', format_summary(report))
 
+    def test_json_uses_raw_raster_for_every_encoding(self):
+        plane = np.random.default_rng(17).integers(0,256,(8,8),dtype=np.uint8)
+        report = analyze({'Y':plane}, {'Y':(1,1)}, {'width':8,'height':8},
+                         [(1,1),(2,2)], [1,3], (4,4))
+        for start in range(0,len(report['results']),6):
+            rows = report['results'][start:start+6]
+            baseline = rows[0]['total']
+            for row in rows:
+                expected = 100*(baseline-row['total'])/baseline
+                self.assertEqual(row['baseline_raw_raster_total'], baseline)
+                self.assertAlmostEqual(row['reduction_vs_raw_percent'], expected)
+                self.assertAlmostEqual(row['reduction_vs_raster_percent'], expected)
+                self.assertAlmostEqual(row['channels']['Y']['reduction_vs_raw_percent'], expected)
+
     def test_cli_multiple_macroblocks_and_lags(self):
         with tempfile.TemporaryDirectory() as tmp:
             path, output = Path(tmp)/'image.png', Path(tmp)/'results.json'

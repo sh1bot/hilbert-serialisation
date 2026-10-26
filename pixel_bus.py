@@ -181,7 +181,8 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
             height = math.ceil(height/macroblock[1])*macroblock[1]
         packed, shapes, gx, gy = pack_chunks(planes, scales, width, height, chunk)
         for lag in lags:
-            baselines = {}
+            baseline = None
+            baseline_channels = None
             for order in ("raster", "z", "hilbert"):
                 coords, local_grid = transfer_layout(gx, gy, order, chunk, macroblock)
                 indices = coords[:, 1]*gx + coords[:, 0]
@@ -193,8 +194,6 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                     streams[name] = words[indices]
                 sequential = np.arange(len(indices))
                 reset_interval = local_grid[0]*local_grid[1]
-                raw_total = None
-                raw_channels = None
                 for encoding in ("raw", "delta-sm"):
                     channels = {}
                     for name, stream in streams.items():
@@ -202,19 +201,21 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                             stream = sign_magnitude_delta(stream, reset_interval)
                         channels[name] = count_transitions(stream, sequential, lag)
                     total = sum(c["total"] for c in channels.values())
-                    if encoding == "raw":
-                        raw_total, raw_channels = total, channels
+                    if baseline is None:
+                        baseline = total
+                        baseline_channels = {name: channel["total"] for name, channel in channels.items()}
                     for name, channel in channels.items():
-                        raw = raw_channels[name]["total"]
+                        raw = baseline_channels[name]
+                        channel["baseline_raw_raster_total"] = raw
                         channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
-                    baseline = baselines.setdefault(encoding, total)
                     report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
                         "encoding": encoding, "predictor_reset_cycles": reset_interval,
                         "within_chunk": within_chunk, "macroblock": macroblock,
                         "lag": lag, "cycles": gx*gy, "comparisons": max(0, gx*gy-lag),
                         "bus_bits": sum(p.shape[1]*8 for p in packed.values()), "channel_lane_shapes": shapes,
                         "channels": channels, "total": total,
-                        "reduction_vs_raw_percent": 100*(raw_total-total)/raw_total if raw_total else None,
+                        "baseline_raw_raster_total": baseline,
+                        "reduction_vs_raw_percent": 100*(baseline-total)/baseline if baseline else None,
                         "reduction_vs_raster_percent": 100*(baseline-total)/baseline if baseline else None})
     return report
 
