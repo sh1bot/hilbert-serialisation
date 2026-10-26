@@ -188,3 +188,9 @@ delta encoder when its predictor is zero.
 
 JSON records include a `fold_only` object with total, per-channel, per-lane and
 per-bit measurements and percentage savings versus raw raster.
+
+The `fold UV only` column uses the row's traversal while leaving Y samples
+unchanged and directly folding U/V bytes. It also compares against raw raster.
+It does not apply the chroma-centering helper: it isolates the benefit of the
+same direct fold on chroma alone. For RGB or grayscale inputs it shows `n/a`.
+JSON includes `fold_uv_only` measurements, or null when not applicable.

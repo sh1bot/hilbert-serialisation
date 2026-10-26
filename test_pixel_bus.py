@@ -172,6 +172,26 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(raw['fold_only']['channels']['Y']['by_lane_lsb_first'],
                              delta['channels']['Y']['by_lane_lsb_first'])
 
+    def test_fold_uv_only_preserves_y_and_folds_chroma(self):
+        rng = np.random.default_rng(8)
+        planes = {'Y':rng.integers(0,256,(8,8),dtype=np.uint8),
+                  'U':rng.integers(0,256,(4,4),dtype=np.uint8),
+                  'V':rng.integers(0,256,(4,4),dtype=np.uint8)}
+        scales = {'Y':(1,1),'U':(2,2),'V':(2,2)}
+        report = analyze(planes,scales,{'width':8,'height':8},[(2,2)],[1,3],(4,4))
+        for raw in report['results'][::2]:
+            uv = raw['fold_uv_only']
+            self.assertEqual(uv['channels']['Y']['by_lane_lsb_first'],raw['channels']['Y']['by_lane_lsb_first'])
+            for name in ('U','V'):
+                self.assertEqual(uv['channels'][name]['by_lane_lsb_first'],
+                                 raw['fold_only']['channels'][name]['by_lane_lsb_first'])
+            self.assertEqual(uv['total'],sum(c['total'] for c in uv['channels'].values()))
+            baseline = raw['baseline_raw_raster_total']
+            self.assertAlmostEqual(uv['reduction_vs_raw_percent'],100*(baseline-uv['total'])/baseline)
+        gray = analyze({'Y':planes['Y']},{'Y':(1,1)}, {'width':8,'height':8},[(2,2)],[1])
+        self.assertIsNone(gray['results'][0]['fold_uv_only'])
+        self.assertIn('n/a',format_summary(gray))
+
     def test_native_jpeg_sampling(self):
         library = os.environ.get('TEST_TURBOJPEG_LIBRARY')
         if not library:

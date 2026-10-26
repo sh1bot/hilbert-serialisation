@@ -208,6 +208,11 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                 folded_channels = {name: count_transitions(fold_signed_bytes(stream), sequential, lag)
                                    for name, stream in streams.items()}
                 folded_total = sum(c["total"] for c in folded_channels.values())
+                uv_channels = ({name: (folded_channels[name].copy() if name in ("U", "V") else
+                                       count_transitions(stream, sequential, lag))
+                                for name, stream in streams.items()}
+                               if "U" in streams and "V" in streams else None)
+                uv_total = sum(c["total"] for c in uv_channels.values()) if uv_channels else None
                 for encoding in ("raw", "delta-sm"):
                     channels = {}
                     for name, stream in streams.items():
@@ -225,8 +230,15 @@ def analyze(planes, scales, metadata, chunks, lags, macroblock=None, within_chun
                     for name, channel in folded_channels.items():
                         raw = baseline_channels[name]
                         channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
+                    if uv_channels:
+                        for name, channel in uv_channels.items():
+                            raw = baseline_channels[name]
+                            channel["reduction_vs_raw_percent"] = 100*(raw-channel["total"])/raw if raw else None
                     report["results"].append({"chunk": list(chunk), "grid": [gx, gy], "order": order,
                         "encoding": encoding, "predictor_reset_cycles": reset_interval,
+                        "fold_uv_only": ({"total": uv_total, "channels": uv_channels,
+                                          "reduction_vs_raw_percent": 100*(baseline-uv_total)/baseline if baseline else None}
+                                         if uv_channels else None),
                         "fold_only": {"total": folded_total, "channels": folded_channels,
                                       "reduction_vs_raw_percent": 100*(baseline-folded_total)/baseline if baseline else None},
                         "within_chunk": within_chunk, "macroblock": macroblock,
@@ -251,18 +263,20 @@ def chunk_arg(value):
 
 def format_summary(report):
     """One row per order, all savings relative to unencoded raster."""
-    lines = ["macroblock chunk   lag order      bits     transitions    vs raster      fold only  with sm-delta"]
+    lines = ["macroblock chunk   lag order      bits     transitions    vs raster      fold only   fold UV only  with sm-delta"]
     baseline = None
     for raw, encoded in zip(report["results"][::2], report["results"][1::2]):
         if raw["order"] == "raster":
             baseline = raw["total"]
         def reduction(total):
             return f"{100*(baseline-total)/baseline:.2f}%" if baseline else "n/a"
+        uv = raw.get("fold_uv_only")
+        uv_reduction = reduction(uv["total"]) if uv else "n/a"
         macroblock = raw.get("macroblock")
         macro_label = f"{macroblock[0]}x{macroblock[1]}" if macroblock else "image"
         lines.append(f"{macro_label:<10} {raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
                      f"{raw['order']:<8} {raw['bus_bits']:>6} "
-                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(raw['fold_only']['total']):>14} {reduction(encoded['total']):>14}")
+                     f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(raw['fold_only']['total']):>14} {uv_reduction:>14} {reduction(encoded['total']):>14}")
     return "\n".join(lines)
 
 
