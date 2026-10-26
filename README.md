@@ -86,7 +86,10 @@ python pixel_bus.py photo.jpg --macroblock 64x64 --chunk 4x4 --lag 1 --json tier
 python pixel_bus.py photo.jpg --macroblock 64x64 --chunk 4x4 --within-chunk extend --json extended.json
 ```
 
-`--macroblock WIDTHxHEIGHT` visits macroblocks in raster order. Within each
+`--macroblock WIDTHxHEIGHT` visits macroblocks in raster order. Repeat the option
+to test multiple sizes, just like `--lag`; all combinations of macroblock size,
+chunk size and lag are evaluated. The console labels every row with its macroblock
+size (`image` when omitted), and JSON records the requested `macroblocks` list. Within each
 macroblock the experiment visits chunks in raster, Z, or Hilbert order, starting
 the same curve orientation in every macroblock. Both macroblock dimensions must
 be multiples of the corresponding chunk dimensions. Omit this option to retain
@@ -161,3 +164,7 @@ macroblock boundaries in the delayed output stream. Scores cover encoded FIFO
 data only; predictor flops, encoder/decoder logic and boundary signalling are
 excluded. A reference decoder is included and tested exhaustively over all
 65,536 previous/current byte pairs, with additional multi-cycle reset tests.
+
+```sh
+python pixel_bus.py photo.jpg --macroblock 32x32 --macroblock 64x64 --chunk 4x4 --lag 1 --lag 4
+```

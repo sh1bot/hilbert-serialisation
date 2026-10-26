@@ -1,4 +1,7 @@
 import os
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,13 +114,29 @@ class MeasurementTests(unittest.TestCase):
         self.assertIn('transitions', summary.splitlines()[0])
         self.assertIn('vs raster', summary.splitlines()[0])
         self.assertIn('with sm-delta', summary.splitlines()[0])
-        self.assertEqual(summary.splitlines()[2].split()[4], '90')
+        self.assertEqual(summary.splitlines()[2].split()[5], '90')
         self.assertIn('10.00%', summary.splitlines()[2])
         self.assertIn('40.00%', summary.splitlines()[2])
         self.assertIn('-10.00%', summary.splitlines()[3])
         self.assertIn('50.00%', summary.splitlines()[3])
         report['results'][0]['total'] = 0
         self.assertIn('n/a', format_summary(report))
+
+    def test_cli_multiple_macroblocks_and_lags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, output = Path(tmp)/'image.png', Path(tmp)/'results.json'
+            Image.fromarray(np.arange(64,dtype=np.uint8).reshape(8,8)).save(path)
+            run = subprocess.run([sys.executable, str(Path(__file__).with_name('pixel_bus.py')),
+                str(path), '--chunk','2x2','--macroblock','4x4','--macroblock','8x8',
+                '--lag','1','--lag','3','--json',str(output)], check=True, capture_output=True, text=True)
+            report = json.loads(output.read_text())
+            self.assertEqual(report['macroblocks'], [[4,4],[8,8]])
+            self.assertEqual(len(report['results']), 24)
+            self.assertEqual({(tuple(r['macroblock']),r['lag']) for r in report['results']},
+                             {((4,4),1),((4,4),3),((8,8),1),((8,8),3)})
+            self.assertEqual(len(run.stdout.splitlines()),14)
+            self.assertIn('4x4', run.stdout)
+            self.assertIn('8x8', run.stdout)
 
     def test_native_jpeg_sampling(self):
         library = os.environ.get('TEST_TURBOJPEG_LIBRARY')

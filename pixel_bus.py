@@ -231,14 +231,16 @@ def chunk_arg(value):
 
 def format_summary(report):
     """One row per order, both savings relative to unencoded raster."""
-    lines = ["chunk   lag order      bits     transitions    vs raster  with sm-delta"]
+    lines = ["macroblock chunk   lag order      bits     transitions    vs raster  with sm-delta"]
     baseline = None
     for raw, encoded in zip(report["results"][::2], report["results"][1::2]):
         if raw["order"] == "raster":
             baseline = raw["total"]
         def reduction(total):
             return f"{100*(baseline-total)/baseline:.2f}%" if baseline else "n/a"
-        lines.append(f"{raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
+        macroblock = raw.get("macroblock")
+        macro_label = f"{macroblock[0]}x{macroblock[1]}" if macroblock else "image"
+        lines.append(f"{macro_label:<10} {raw['chunk'][0]}x{raw['chunk'][1]:<4} {raw['lag']:>3} "
                      f"{raw['order']:<8} {raw['bus_bits']:>6} "
                      f"{raw['total']:>15} {reduction(raw['total']):>12} {reduction(encoded['total']):>14}")
     return "\n".join(lines)
@@ -248,7 +250,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path)
     parser.add_argument("--chunk", type=chunk_arg, action="append", help="repeatable WIDTHxHEIGHT; default sampling minimum")
-    parser.add_argument("--macroblock", type=chunk_arg, help="WIDTHxHEIGHT; macroblocks visited in raster order")
+    parser.add_argument("--macroblock", type=chunk_arg, action="append",
+                        help="repeatable WIDTHxHEIGHT; macroblocks visited in raster order")
     parser.add_argument("--within-chunk", choices=("raster", "extend"), default="raster",
                         help="fixed raster lanes or continue traversal into chunk sample lanes")
     parser.add_argument("--lag", type=int, action="append", help="repeatable positive lag; default 1")
@@ -261,8 +264,13 @@ def main():
     try:
         planes, scales, meta = load_image(args.image, args.mode, args.turbojpeg_library)
         default = (max(s[0] for s in scales.values()), max(s[1] for s in scales.values()))
-        report = analyze(planes, scales, meta, args.chunk or [default], args.lag or [1],
-                         args.macroblock, args.within_chunk)
+        reports = [analyze(planes, scales, meta, args.chunk or [default], args.lag or [1],
+                           macroblock, args.within_chunk)
+                   for macroblock in (args.macroblock or [None])]
+        report = reports[0]
+        report.pop("macroblock")
+        report["macroblocks"] = args.macroblock or [None]
+        report["results"] = [row for item in reports for row in item["results"]]
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         parser.exit(2, f"error: {exc}\n")
     print(meta["decode"])
